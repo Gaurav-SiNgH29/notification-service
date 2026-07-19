@@ -92,6 +92,7 @@ Open MySQL and run:
 CREATE DATABASE notification_db;
 CREATE USER 'notif_user'@'localhost' IDENTIFIED BY 'notif_pass';
 GRANT ALL PRIVILEGES ON notification_db.* TO 'notif_user'@'localhost';
+FLUSH PRIVILEGES;
 ```
 
 **2. Clone the repo and run**
@@ -124,7 +125,7 @@ Tables are created automatically on first run. Three test users are seeded into 
 Every request needs this header:
 
 ```
-X-API-Key: indiagold-secret-key-2026
+X-API-Key: indigold-secret-key-2024
 ```
 
 Missing or wrong key returns `401`.
@@ -187,7 +188,7 @@ Each channel in your request gets a result:
 
 **Headers (add to every request):**
 ```
-X-API-Key: indiagold-secret-key-2026
+X-API-Key: indigold-secret-key-2024
 Content-Type: application/json
 ```
 
@@ -299,4 +300,16 @@ SELECT * FROM notifications;
 SELECT * FROM notification_history;
 ```
 
-Every dispatch attempt is logged in `notification_history` — including skipped channels.
+Every dispatch attempt is logged in `notification_history` — including skipped channels, which shows the preference enforcement is working.
+
+---
+
+## Diagrams
+
+### Class Diagram
+![Class Diagram](docs/classdiagram.jpeg)
+
+### ER Diagram
+![ER Diagram](docs/er%20diagram.jpeg)
+
+---
