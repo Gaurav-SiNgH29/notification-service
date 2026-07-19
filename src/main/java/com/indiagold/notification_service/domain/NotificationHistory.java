@@ -20,18 +20,16 @@ public class NotificationHistory {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "notification_id", nullable = false)
+    private Notification notification;
+
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private ChannelType channel;
-
-    // @Column(nullable = false, length = 255)
-    // private String title;
-
-    // @Column(nullable = false, columnDefinition = "TEXT")
-    // private String body;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

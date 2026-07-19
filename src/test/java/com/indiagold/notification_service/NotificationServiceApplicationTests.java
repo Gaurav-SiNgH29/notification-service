@@ -2,6 +2,7 @@ package com.indiagold.notification_service;
 
 import com.indiagold.notification_service.channel.DispatchResult;
 import com.indiagold.notification_service.channel.NotificationChannel;
+import com.indiagold.notification_service.domain.Notification;
 import com.indiagold.notification_service.domain.User;
 import com.indiagold.notification_service.domain.UserPreference;
 import com.indiagold.notification_service.domain.enums.ChannelType;
@@ -10,9 +11,10 @@ import com.indiagold.notification_service.dto.ChannelResult;
 import com.indiagold.notification_service.dto.NotificationRequest;
 import com.indiagold.notification_service.exception.UserNotFoundException;
 import com.indiagold.notification_service.repository.NotificationHistoryRepository;
+import com.indiagold.notification_service.repository.NotificationRepository;
 import com.indiagold.notification_service.repository.UserPreferenceRepository;
-import com.indiagold.notification_service.repository.UserRepository;
 import com.indiagold.notification_service.service.NotificationService;
+import com.indiagold.notification_service.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,9 @@ class NotificationServiceTest {
     private NotificationHistoryRepository notificationHistoryRepository;
 
     @Mock
+    private NotificationRepository notificationRepository;
+
+    @Mock
     private NotificationChannel emailChannel;
 
     @Mock
@@ -52,40 +57,45 @@ class NotificationServiceTest {
 
     // ─── Test Data ──────────────────────────────────────────────────
     private User testUser;
+    private Notification savedNotification;
 
     @BeforeEach
     void setUp() {
-        // Tell mock channels which type they represent
         when(emailChannel.getChannelType()).thenReturn(ChannelType.EMAIL);
         when(smsChannel.getChannelType()).thenReturn(ChannelType.SMS);
 
-        // Build the service with our mocks
         notificationService = new NotificationService(
                 userRepository,
                 userPreferenceRepository,
                 notificationHistoryRepository,
+                notificationRepository,
                 List.of(emailChannel, smsChannel)
         );
 
-        // Build a reusable test user
         testUser = new User();
         testUser.setId(1L);
         testUser.setName("Alice");
         testUser.setEmail("alice@example.com");
         testUser.setPhone("+919999911111");
         testUser.setDeviceToken("device-token-alice");
+
+        // Every test that reaches channel processing needs a saved notification
+        // returned from the repository mock
+        savedNotification = new Notification();
+        savedNotification.setId(1L);
+        savedNotification.setUser(testUser);
+        savedNotification.setTitle("Test Title");
+        savedNotification.setBody("Test Body");
     }
 
     // ─── Test 1 — User Not Found ─────────────────────────────────────
     @Test
     @DisplayName("Should throw UserNotFoundException when userId does not exist")
     void shouldThrowExceptionWhenUserNotFound() {
-        // Arrange
         when(userRepository.findById(99L)).thenReturn(Optional.empty());
 
         NotificationRequest request = buildRequest(99L, List.of(ChannelType.EMAIL));
 
-        // Act & Assert
         assertThatThrownBy(() -> notificationService.processNotification(request))
                 .isInstanceOf(UserNotFoundException.class)
                 .hasMessageContaining("99");
@@ -95,34 +105,26 @@ class NotificationServiceTest {
     @Test
     @DisplayName("Should skip channel when user has not opted in")
     void shouldSkipChannelWhenNotOptedIn() {
-        // Arrange
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-
-        // User opted into EMAIL only
         when(userPreferenceRepository.findByUserId(1L))
                 .thenReturn(List.of(
                         buildPreference(ChannelType.EMAIL, true)
                 ));
-
-        // Request includes SMS which user has not opted into
-        NotificationRequest request = buildRequest(1L,
-                List.of(ChannelType.EMAIL, ChannelType.SMS));
-
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
         when(emailChannel.send(any(), any(), any()))
                 .thenReturn(DispatchResult.delivered());
 
-        // Act
+        NotificationRequest request = buildRequest(1L,
+                List.of(ChannelType.EMAIL, ChannelType.SMS));
+
         List<ChannelResult> results = notificationService.processNotification(request);
 
-        // Assert
         assertThat(results).hasSize(2);
-
         assertThat(results)
                 .filteredOn(r -> r.getChannel() == ChannelType.SMS)
                 .extracting(ChannelResult::getStatus)
                 .containsExactly(DeliveryStatus.SKIPPED);
 
-        // SMS provider should never have been called
         verify(smsChannel, never()).send(any(), any(), any());
     }
 
@@ -130,28 +132,21 @@ class NotificationServiceTest {
     @Test
     @DisplayName("Should dispatch to channel when user has opted in")
     void shouldDispatchWhenUserOptedIn() {
-        // Arrange
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-
         when(userPreferenceRepository.findByUserId(1L))
                 .thenReturn(List.of(
                         buildPreference(ChannelType.EMAIL, true)
                 ));
-
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
         when(emailChannel.send(any(), any(), any()))
                 .thenReturn(DispatchResult.delivered());
 
         NotificationRequest request = buildRequest(1L, List.of(ChannelType.EMAIL));
 
-        // Act
         List<ChannelResult> results = notificationService.processNotification(request);
 
-        // Assert
         assertThat(results).hasSize(1);
-
         assertThat(results.get(0).getStatus()).isEqualTo(DeliveryStatus.DELIVERED);
-
-        // Email provider must have been called exactly once
         verify(emailChannel, times(1)).send(any(), any(), any());
     }
 
@@ -159,30 +154,24 @@ class NotificationServiceTest {
     @Test
     @DisplayName("Should return all SKIPPED when user opted out of everything")
     void shouldReturnAllSkippedWhenUserOptedOutOfEverything() {
-        // Arrange
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-
-        // User opted out of everything
         when(userPreferenceRepository.findByUserId(1L))
                 .thenReturn(List.of(
                         buildPreference(ChannelType.EMAIL, false),
                         buildPreference(ChannelType.SMS, false)
                 ));
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
 
         NotificationRequest request = buildRequest(1L,
                 List.of(ChannelType.EMAIL, ChannelType.SMS));
 
-        // Act
         List<ChannelResult> results = notificationService.processNotification(request);
 
-        // Assert
         assertThat(results).hasSize(2);
-
         assertThat(results)
                 .extracting(ChannelResult::getStatus)
                 .containsOnly(DeliveryStatus.SKIPPED);
 
-        // No provider should have been called
         verify(emailChannel, never()).send(any(), any(), any());
         verify(smsChannel, never()).send(any(), any(), any());
     }
@@ -191,33 +180,26 @@ class NotificationServiceTest {
     @Test
     @DisplayName("Should respect intersection — dispatch opted-in, skip opted-out")
     void shouldRespectIntersectionOfRequestedAndOptedInChannels() {
-        // Arrange
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-
-        // User opted into EMAIL only
         when(userPreferenceRepository.findByUserId(1L))
                 .thenReturn(List.of(
                         buildPreference(ChannelType.EMAIL, true),
                         buildPreference(ChannelType.SMS, false)
                 ));
-
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
         when(emailChannel.send(any(), any(), any()))
                 .thenReturn(DispatchResult.delivered());
 
         NotificationRequest request = buildRequest(1L,
                 List.of(ChannelType.EMAIL, ChannelType.SMS));
 
-        // Act
         List<ChannelResult> results = notificationService.processNotification(request);
 
-        // Assert
         assertThat(results).hasSize(2);
-
         assertThat(results)
                 .filteredOn(r -> r.getChannel() == ChannelType.EMAIL)
                 .extracting(ChannelResult::getStatus)
                 .containsExactly(DeliveryStatus.DELIVERED);
-
         assertThat(results)
                 .filteredOn(r -> r.getChannel() == ChannelType.SMS)
                 .extracting(ChannelResult::getStatus)
@@ -228,25 +210,20 @@ class NotificationServiceTest {
     @Test
     @DisplayName("Should record FAILED status when provider fails")
     void shouldRecordFailedStatusWhenProviderFails() {
-        // Arrange
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-
         when(userPreferenceRepository.findByUserId(1L))
                 .thenReturn(List.of(
                         buildPreference(ChannelType.EMAIL, true)
                 ));
-
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
         when(emailChannel.send(any(), any(), any()))
                 .thenReturn(DispatchResult.failed("Simulated failure"));
 
         NotificationRequest request = buildRequest(1L, List.of(ChannelType.EMAIL));
 
-        // Act
         List<ChannelResult> results = notificationService.processNotification(request);
 
-        // Assert
         assertThat(results).hasSize(1);
-
         assertThat(results.get(0).getStatus()).isEqualTo(DeliveryStatus.FAILED);
     }
 
@@ -254,26 +231,47 @@ class NotificationServiceTest {
     @Test
     @DisplayName("Should save history record for every channel outcome")
     void shouldSaveHistoryForEveryChannelOutcome() {
-        // Arrange
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-
         when(userPreferenceRepository.findByUserId(1L))
                 .thenReturn(List.of(
                         buildPreference(ChannelType.EMAIL, true),
                         buildPreference(ChannelType.SMS, false)
                 ));
-
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
         when(emailChannel.send(any(), any(), any()))
                 .thenReturn(DispatchResult.delivered());
 
         NotificationRequest request = buildRequest(1L,
                 List.of(ChannelType.EMAIL, ChannelType.SMS));
 
-        // Act
         notificationService.processNotification(request);
 
-        // Assert — history saved twice, once for each channel
+        // One save for the notification itself
+        verify(notificationRepository, times(1)).save(any());
+
+        // Two saves for history — one per channel
         verify(notificationHistoryRepository, times(2)).save(any());
+    }
+
+    // ─── Test 8 — Notification Saved Before Dispatch ─────────────────
+    @Test
+    @DisplayName("Should save notification record before dispatching to channels")
+    void shouldSaveNotificationBeforeDispatching() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+        when(userPreferenceRepository.findByUserId(1L))
+                .thenReturn(List.of(
+                        buildPreference(ChannelType.EMAIL, true)
+                ));
+        when(notificationRepository.save(any())).thenReturn(savedNotification);
+        when(emailChannel.send(any(), any(), any()))
+                .thenReturn(DispatchResult.delivered());
+
+        NotificationRequest request = buildRequest(1L, List.of(ChannelType.EMAIL));
+
+        notificationService.processNotification(request);
+
+        // Notification must be saved exactly once
+        verify(notificationRepository, times(1)).save(any());
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────

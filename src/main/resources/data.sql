@@ -1,6 +1,7 @@
 
 -- CLEAR EXISTING DATA (safe to re-run on restart)
 DELETE FROM notification_history;
+DELETE FROM notifications;
 DELETE FROM user_preferences;
 DELETE FROM users;
 
